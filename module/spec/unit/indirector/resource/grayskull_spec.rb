@@ -32,10 +32,6 @@ describe Puppet::Resource::Grayskull do
       subject.search(Puppet::Resource.indirection.request(:search, type, args))
     end
 
-    it "should fail if the type is not known to Puppet" do
-      expect { search("banana") }.to raise_error Puppet::Error, /Could not find type/
-    end
-
     it "should return an empty array if no resources match" do
       subject.stubs(:http_get).returns(stub('response', :body => '[]'))
       search("exec").should == []
@@ -140,7 +136,7 @@ describe Puppet::Resource::Grayskull do
 
   describe "#headers" do
     it "should accept the correct mime type" do
-      subject.headers['Accept'].should == 'application/vnd.com.puppetlabs.cmdb.resource-list+json'
+      subject.headers['Accept'].should == 'application/json'
     end
   end
 end
