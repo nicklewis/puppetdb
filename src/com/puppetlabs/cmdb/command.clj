@@ -8,13 +8,30 @@
 ;;      "version" 123
 ;;      "payload" <json object>}
 ;;
-;; `payload` must be a valid JSON object of any sort. It's up to an
-;; individual handler function how to interpret that object.
+;; `payload` must be a valid JSON string of any sort. It's up to an individual
+;; handler function how to interpret that object.
 ;;
-;; The command object may also contain an optional "retries"
-;; attribute that contains an integer number of times this message
-;; has been re-enqueued for processing. The CMDB may discard
-;; messages with retry counts that exceed its configured thresholds.
+;; The command object may also contain an `annotations` attribute containing a
+;; map with arbitrary keys and values which may have command-specific meaning
+;; or may be used by the message processing framework itself.
+;;
+;; Failed messages will have an `attempts` annotation containing an array of
+;; maps of the form:
+;;
+;;     {:timestamp <timestamp>
+;;      :error     "some error message"
+;;      :trace     <stack trace from :exception>}
+;;
+;; Each entry corresponds to a single failed attempt at handling the message,
+;; containing the error message, stack trace, and timestamp for each failure.
+;; The CMDB may discard messages which have been attempted and failed too many
+;; times, or which have experienced fatal errors (including unparseable
+;; messages).
+;;
+;; Failed messages will be stored in files in the "dead letter office", located
+;; under the MQ data directory, in `/discarded/<command>`. These files contain
+;; the annotated message, along with each exception that occured while trying
+;; to handle the message.
 ;;
 ;; We currently support the following wire formats for commands:
 ;;
@@ -30,6 +47,7 @@
   (:require [clojure.tools.logging :as log]
             [com.puppetlabs.cmdb.scf.storage :as scf-storage]
             [com.puppetlabs.cmdb.catalog :as cat]
+            [com.puppetlabs.cmdb.command.dlo :as dlo]
             [com.puppetlabs.mq :as mq]
             [com.puppetlabs.utils :as pl-utils]
             [cheshire.core :as json]
@@ -135,9 +153,12 @@
    :post [(map? %)
           (:payload %)
           (string? (:command %))
-          (number? (:version %))]}
-  (->> (json/parse-string command-string)
-       (pl-utils/mapkeys keyword)))
+          (number? (:version %))
+          (map? (:annotations %))]}
+  (let [message (-> command-string
+                  (json/parse-string true))
+        annotations (get message :annotations {})]
+    (assoc message :annotations annotations)))
 
 ;; ## Command processing exception classes
 
@@ -165,12 +186,11 @@
 
 ;; Catalog replacement
 
-(defmethod process-command! ["replace catalog" 1] [cmd options]
+(defmethod process-command! ["replace catalog" 1]
+  [{:keys [payload]} options]
   ;; Parsing a catalog either works, or it generates a fatal exception
   (let [catalog  (try+
-                  (-> cmd
-                      :payload
-                      (cat/parse-from-json-obj))
+                  (cat/parse-from-json-string payload)
                   (catch Throwable e
                     (throw+ (fatality! e))))
         certname (:certname catalog)]
@@ -184,7 +204,7 @@
 
 (defmethod process-command! ["replace facts" 1]
   [{:keys [payload]} {:keys [db]}]
-  (let [{:strs [name values]} payload]
+  (let [{:strs [name values]} (json/parse-string payload)]
     (sql/with-connection db
       (when-not (scf-storage/certname-exists? name)
         (scf-storage/add-certname! name))
@@ -216,6 +236,36 @@
 ;; architecture.
 ;;
 
+(defn wrap-with-meter
+  "Wraps a message processor `f` and a `meter` such that `meter` will be marked
+  for each invocation of `f`."
+  [f meter]
+  (fn [msg]
+    (mark! meter)
+    (f msg)))
+
+(defn try-parse-command
+  "Tries to parse `msg`, returning the parsed message if the parse is
+  successful or a Throwable object if one is thrown."
+  [msg]
+  (try+
+    (parse-command msg)
+    (catch Throwable e
+      e)))
+
+(defn annotate-with-attempt
+  "Adds an `attempt` annotation to `msg` indicating there was a failed attempt
+  at handling the message, including the error and trace from `e`."
+  [{:keys [annotations] :as msg} e]
+  {:pre [(map? annotations)]
+   :post [(= (count (get-in % [:annotations :attempts]))
+             (inc (count (:attempts annotations))))]}
+  (let [attempts (get annotations :attempts [])
+        attempt {:timestamp (pl-utils/timestamp)
+                 :error (str e)
+                 :trace (map str (.getStackTrace e))}]
+    (update-in msg [:annotations :attempts] conj attempt)))
+
 (defn wrap-with-exception-handling
   "Wrap a message processor `f` such that all Throwable or `fatal?`
   exceptions are caught.
@@ -244,16 +294,17 @@
        (mark! (global-metric :retried))))))
 
 (defn wrap-with-command-parser
-  "Wrap a message processor `f` such that all messages passed to `f`
-  are well-formed commands. If a message cannot be parsed, a `fatal?`
-  exception is thrown, circumventing invokation of `f`."
-  [f]
+  "Wrap a message processor `f` such that all messages passed to `f` are
+  well-formed commands. If a message cannot be parsed, the `on-fatal` hook is
+  invoked, and `f` is ignored."
+  [f on-parse-error]
   (fn [msg]
-    (let [parsed-msg (try+
-                      (parse-command msg)
-                      (catch Throwable e
-                        (throw+ (fatality! e))))]
-      (f parsed-msg))))
+    (let [parse-result (try-parse-command msg)]
+      (if (instance? Throwable parse-result)
+        (do
+          (mark! (global-metric :fatal))
+          (on-parse-error msg parse-result))
+        (f parse-result)))))
 
 (defn wrap-with-discard
   "Wrap a message processor `f` such that incoming commands with a
@@ -262,19 +313,21 @@
   This assumes that all incoming messages are well-formed command
   objects, such as those produced by the `wrap-with-command-parser`
   middleware."
-  [f max-retries]
-  (fn [{:keys [command version retries] :or {retries 0} :as msg}]
-    (let [cmd-metric #(get-in @metrics [command version %])]
+  [f on-discard max-retries]
+  (fn [{:keys [command version annotations] :as msg}]
+    (let [retries (count (:attempts annotations))
+          cmd-metric #(get-in @metrics [command version %])]
       (create-metrics-for-command! command version)
       (mark! (cmd-metric :seen))
       (update! (global-metric :retry-counts) retries)
       (update! (cmd-metric :retry-counts) retries)
 
-      (when (> retries max-retries)
+      (when (>= retries max-retries)
         (mark! (global-metric :discarded))
-        (mark! (cmd-metric :discarded)))
+        (mark! (cmd-metric :discarded))
+        (on-discard msg))
 
-      (when (<= retries max-retries)
+      (when (< retries max-retries)
         (let [result (time! (cmd-metric :processing-time)
                             (f msg))]
           (mark! (cmd-metric :processed))
@@ -299,33 +352,56 @@
 ;; command-processing.
 ;;
 
-;; ### Fatal error callback
+;; ### Parse error callback
+
+(defn handle-command-discard
+  [{:keys [command annotations] :as msg} discard]
+  (let [attempts (count (:attempts annotations))]
+    (log/error (format "Exceeded allowed %d attempts processing command [%s]" attempts command))
+    (discard msg nil)))
+
+(defn handle-parse-error
+  [msg e discard]
+  (log/error e (format "Fatal error parsing command" msg))
+  (discard msg e))
 
 (defn handle-command-failure
-  "Dump the error encountered during command-handling to the log"
-  [msg e]
-  (log/error "Fatal error processing msg" e))
+  "Dump the error encountered during command-handling to the log and discard
+  the message."
+  [{:keys [command annotations] :as msg} e discard]
+  (let [attempt (count (:attempts annotations))
+        msg (annotate-with-attempt msg e)]
+    (log/error e (format "Fatal error processing command [%s] on attempt %d" command attempt))
+    (discard msg e)))
 
 ;; ### Retry callback
-
-(defn format-for-retry
-  "Return a version of the supplied command message with its retry count incremented."
-  [msg]
-  {:post [(string? %)]}
-  (let [{:keys [command version payload retries] :or {retries 0}} (parse-command msg)]
-    (json/generate-string {"command" command
-                           "version" version
-                           "payload" payload
-                           "retries" (inc retries)})))
 
 (defn handle-command-retry
   "Dump the error encountered to the log, and re-publish the message
   with an incremented retry counter"
-  [msg e publish-fn]
-  (let [{:keys [command version]} (parse-command msg)]
-    (mark! (get-in @metrics [command version :retried])))
-  (log/error "Retrying message due to:" e)
-  (publish-fn (format-for-retry msg)))
+  [{:keys [command version annotations] :as msg} e publish-fn]
+  (mark! (get-in @metrics [command version :retried]))
+  (let [attempt (count (:attempts annotations))
+        msg (annotate-with-attempt msg e)]
+    (log/error e (format "Retrying command [%s] after attempt %d" command attempt))
+    (publish-fn (json/generate-string msg))))
+
+;; ### Message handler
+
+(defn produce-message-handler
+  "Produce a message handler suitable for use by `process-commands!`. "
+  [publish discarded-dir options-map]
+  (let [discard        #(dlo/store-failed-message %1 %2 discarded-dir)
+        on-discard     #(handle-command-discard % discard)
+        on-parse-error #(handle-parse-error %1 %2 discard)
+        on-fatal       #(handle-command-failure %1 %2 discard)
+        on-retry       #(handle-command-retry %1 %2 publish)]
+    (-> #(process-command! % options-map)
+      (wrap-with-discard on-discard 5)
+      (wrap-with-exception-handling on-retry on-fatal)
+      (wrap-with-command-parser on-parse-error)
+      (wrap-with-meter (global-metric :seen))
+      (wrap-with-thread-name "command-proc"))))
 
 ;; ### Principal function
 
@@ -334,26 +410,19 @@
 
   If the MQ consumption timeout is reached without any new data, the
   function will terminate."
-  [connection endpoint options-map]
-  (let [on-fatal   handle-command-failure
-        producer   (mq-conn/producer connection)
+  [connection endpoint discarded-dir options-map]
+  (let [producer   (mq-conn/producer connection)
         publish    #(mq-producer/publish producer endpoint %)
-        on-retry   (fn [msg e] (handle-command-retry msg e publish))
-        on-message (-> #(process-command! % options-map)
-                       (wrap-with-discard 5)
-                       (wrap-with-command-parser)
-                       (wrap-with-exception-handling on-retry on-fatal)
-                       (wrap-with-thread-name "command-proc"))]
-
-    (let [mq-error (promise)
-          consumer (mq-conn/consumer connection
+        on-message (produce-message-handler publish discarded-dir options-map)
+        mq-error   (promise)
+        consumer   (mq-conn/consumer connection
                                      {:endpoint   endpoint
                                       :on-message on-message
                                       :transacted true
                                       :on-failure #(deliver mq-error (:exception %))})]
-      (mq-cons/start consumer)
+    (mq-cons/start consumer)
 
-      ;; Block until an exception is thrown by the consumer thread
-      (deref mq-error)
-      (mq-cons/close consumer)
-      (throw @mq-error))))
+    ;; Block until an exception is thrown by the consumer thread
+    (deref mq-error)
+    (mq-cons/close consumer)
+    (throw @mq-error)))

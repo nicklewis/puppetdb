@@ -17,17 +17,17 @@ describe Puppet::Node::Facts::Grayskull do
       payload = {
         :command => "replace facts",
         :version => 1,
-        :payload => facts,
+        :payload => facts.to_pson,
       }.to_pson
 
       subject.expects(:http_post).with do |request,uri,body,headers|
-        body =~ /^payload=(.+)/
+        body =~ /payload=(.+)/
         @sent_payload = $1
       end
 
       save
 
-      URI.decode(@sent_payload).should == payload
+      CGI.unescape(@sent_payload).should == payload
     end
   end
 end

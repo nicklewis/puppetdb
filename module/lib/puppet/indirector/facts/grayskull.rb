@@ -1,5 +1,6 @@
 require 'puppet/node/facts'
 require 'puppet/indirector/rest'
+require 'digest'
 
 class Puppet::Node::Facts::Grayskull < Puppet::Indirector::REST
   # These settings don't exist in Puppet yet, so we have to hard-code them for now.
@@ -15,9 +16,11 @@ class Puppet::Node::Facts::Grayskull < Puppet::Indirector::REST
   end
 
   def save(request)
-    payload = URI.encode(message(request.instance).to_pson)
+    msg = message(request.instance).to_pson
+    checksum = Digest::SHA1.hexdigest(msg)
+    payload = CGI.escape(msg)
 
-    http_post(request, "/commands", "payload=#{payload}", headers)
+    http_post(request, "/commands", "checksum=#{checksum}&payload=#{payload}", headers)
   end
 
   def find(request)
@@ -27,7 +30,7 @@ class Puppet::Node::Facts::Grayskull < Puppet::Indirector::REST
   def headers
     {
       "Accept" => "application/json",
-      "Content-Type" => "application/x-www-form-urlencoded",
+      "Content-Type" => "application/x-www-form-urlencoded; charset=UTF-8",
     }
   end
 
@@ -35,7 +38,7 @@ class Puppet::Node::Facts::Grayskull < Puppet::Indirector::REST
     {
       :command => "replace facts",
       :version => 1,
-      :payload => instance,
+      :payload => instance.to_pson,
     }
   end
 end
