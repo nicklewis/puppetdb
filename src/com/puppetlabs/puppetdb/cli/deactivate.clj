@@ -32,8 +32,7 @@
 
 (defn -main
   [& args]
-  (let [[options nodes] (cli! args
-                              ["-c" "--config" "Path to config.ini"])
+  (let [[options nodes] (cli! args)
         config      (ini-to-map (:config options))
         host        (get-in config [:jetty :host] "localhost")
         port        (get-in config [:jetty :port] 8080)
