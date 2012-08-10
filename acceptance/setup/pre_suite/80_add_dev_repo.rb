@@ -5,6 +5,7 @@ step "Add development repository on PuppetDB server" do
   case os
   when :debian
     on database, "echo deb http://apt-dev.puppetlabs.lan $(lsb_release -sc) main >> /etc/apt/sources.list"
+    on database, "wget http://apt-dev.puppetlabs.lan/pubkey.gpg && apt-key add pubkey.gpg"
     on database, "apt-get update"
   when :redhat
     create_remote_file database, '/etc/yum.repos.d/puppetlabs-prerelease.repo', <<-REPO.gsub(' '*6, '')
