@@ -108,6 +108,11 @@ describe Puppet::Resource::Puppetdb do
       subject.build_expression(['tag','==','value']).should == ['=', 'tag', 'value']
     end
 
+    # Tags are always lowercase from Puppet, so we lowercase to match them.
+    it "should lowercase tag queries" do
+      subject.build_expression(['tag','==','UPPERcase']).should == ['=', 'tag', 'uppercase']
+    end
+
     it "should conjoin 'and' queries with 'and'" do
       query = [['tag', '==', 'one'], 'and', ['tag', '==', 'two']]
       subject.build_expression(query).should == ['and',

@@ -69,6 +69,10 @@ class Puppet::Resource::Puppetdb < Puppet::Indirector::REST
              ['parameter', field]
            end
 
+    # Tags are always lowercased by Puppet, so we downcase the query term as
+    # well
+    value = value.downcase if path == 'tag'
+
     equal_expr = ['=', path, value]
 
     op == '!=' ? ['not', equal_expr] : equal_expr
