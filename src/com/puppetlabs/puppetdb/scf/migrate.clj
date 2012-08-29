@@ -170,6 +170,40 @@
     (str "ALTER TABLE certname_catalogs ADD PRIMARY KEY (certname,catalog,timestamp)")
     (str "CREATE INDEX idx_certname_catalogs_certname_catalog ON certname_catalogs(certname,catalog)")))
 
+(defn deltafy-catalogs
+  "This adds a `catalog_resource_deltas` table, which represents the additions and
+  removals of a given `resource` to/from the catalog of a particular
+  `certname`. There is also a `catalog_edge_deltas` table which is similar, but
+  for an edge.  Given that the 'catalog' for a certname never completely
+  changes, the catalog hash is a less useful concept now. So now we identify a
+  catalog simply by certname. The `certname_catalogs` table has `certname`,
+  `catalog_snapshot` (which is an integer representing the internal version
+  number of its catalog), and `hash`. This represents the latest version of the
+  catalog. The hash is used not to identify catalogs, but only to facilitate
+  deduplication in the common case where the catalog is unchanged. The
+  `catalogs` table is removed."
+  []
+  (sql/create-table :catalog_resource_deltas
+                    ["catalog" "VARCHAR(40)" "REFERENCES catalogs(hash)" "ON DELETE CASCADE"]
+                    ["resource" "VARCHAR(40)" "NOT NULL"]
+                    ["added" "INT" "NOT NULL"]
+                    ["removed" "INT"])
+
+  (sql/create-table :catalog_resource_deltas
+                    ["catalog" "VARCHAR(40)" "REFERENCES catalogs(hash)" "ON DELETE CASCADE"]
+                    ["source" "VARCHAR(40)" "NOT NULL"]
+                    ["target" "VARCHAR(40)" "NOT NULL"]
+                    ["type" "TEXT" "NOT NULL"]
+                    ["added" "INT" "NOT NULL"]
+                    ["removed" "INT"])
+  (sql/do-commands
+    (str "ALTER TABLE certname_catalogs ADD "
+         "(catalog_version TEXT NOT NULL "
+         "snapshot INT NOT NULL) "
+         "RENAME COLUMN catalog hash")
+    "UPDATE certname_catalogs SET snapshot = 1, catalog_version = (SELECT catalog_version FROM catalogs WHERE hash = certname_catalogs.hash)"
+    "DROP TABLE catalogs"))
+
 ;; The available migrations, as a map from migration version to migration
 ;; function.
 (def migrations
@@ -177,7 +211,7 @@
    2 allow-node-deactivation
    3 add-catalog-timestamps
    4 add-certname-facts-metadata-table
-   5 allow-historical-catalogs})
+   5 deltafy-catalogs})
 
 (defn schema-version
   "Returns the current version of the schema, or 0 if the schema
