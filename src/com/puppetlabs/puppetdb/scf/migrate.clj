@@ -13,11 +13,14 @@
 
 (ns com.puppetlabs.puppetdb.scf.migrate
   (:require [clojure.java.jdbc :as sql]
-            [clojure.tools.logging :as log])
+            [clojure.tools.logging :as log]
+            [clojure.string :as string])
   (:use [clj-time.coerce :only [to-timestamp]]
         [clj-time.core :only [now]]
         [com.puppetlabs.jdbc :only [query-to-vec]]
-        [com.puppetlabs.puppetdb.scf.storage :only [sql-array-type-string]]))
+        [com.puppetlabs.puppetdb.scf.storage :only [sql-array-type-string
+                                                    sql-current-connection-database-name
+                                                    sql-current-connection-database-version]]))
 
 (defn initialize-store
   "Create the initial database schema."
@@ -170,6 +173,23 @@
     (str "ALTER TABLE certname_catalogs ADD PRIMARY KEY (certname,catalog,timestamp)")
     (str "CREATE INDEX idx_certname_catalogs_certname_catalog ON certname_catalogs(certname,catalog)")))
 
+(defn add-missing-indexes
+  "Add several new indexes:
+    * catalog_resources USING (catalog)
+    * catalog_resources USING (type,title)
+    * catalog_resources USING gin(tags) [only when using postgres]"
+  []
+  (log/warn "Adding additional indexes; this may take several minutes, depending on the size of your database. Trust us, it will all be worth it in the end.")
+  (sql/do-commands
+    "CREATE INDEX idx_catalog_resources_catalog ON catalog_resources(catalog)"
+    "CREATE INDEX idx_catalog_resources_type_title ON catalog_resources(type,title)")
+
+  (when (= (sql-current-connection-database-name) "PostgreSQL")
+    (if (pos? (compare (sql-current-connection-database-version) [8 1]))
+      (sql/do-commands
+        "CREATE INDEX idx_catalog_resources_tags_gin ON catalog_resources USING gin(tags)")
+      (log/warn (format "Version %s of PostgreSQL is too old to support fast tag searches; skipping GIN index on tags. For reliability and performance reasons, consider upgrading to the latest stable version." (string/join "." (sql-current-connection-database-version)))))))
+
 ;; The available migrations, as a map from migration version to migration
 ;; function.
 (def migrations
@@ -177,7 +197,8 @@
    2 allow-node-deactivation
    3 add-catalog-timestamps
    4 add-certname-facts-metadata-table
-   5 allow-historical-catalogs})
+   5 add-missing-indexes
+   6 allow-historical-catalogs})
 
 (defn schema-version
   "Returns the current version of the schema, or 0 if the schema
