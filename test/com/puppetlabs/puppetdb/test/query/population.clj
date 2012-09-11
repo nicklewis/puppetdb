@@ -30,12 +30,23 @@
        {:certname "h1" :catalog "c1" :timestamp (to-timestamp (now))})
 
       (sql/insert-records
+        :resource_metadata
+        {:hash "1" :type "Foo" :title "Bar" :exported true}
+        {:hash "2" :type "Foo" :title "Baz" :exported true}
+        {:hash "3" :type "Foo" :title "Boo" :exported true}
+        {:hash "4" :type "Foo" :title "Goo" :exported true})
+
+      (sql/insert-records
+        :resource_tags
+        {:hash "1" :tags (to-jdbc-varchar-array [])})
+
+      (sql/insert-records
        :catalog_resources
-       {:catalog "c1" :resource "1" :type "Foo" :title "Bar" :exported true :tags (to-jdbc-varchar-array [])}
+       {:catalog "c1" :params "1" :metadata "1" :tags "1"}
        ;; c2's resource shouldn't be counted, as they don't correspond to an active node
-       {:catalog "c2" :resource "1" :type "Foo" :title "Baz" :exported true :tags (to-jdbc-varchar-array [])}
-       {:catalog "c1" :resource "2" :type "Foo" :title "Boo" :exported true :tags (to-jdbc-varchar-array [])}
-       {:catalog "c1" :resource "3" :type "Foo" :title "Goo" :exported true :tags (to-jdbc-varchar-array [])})
+       {:catalog "c2" :params "1" :metadata "2" :tags "1"}
+       {:catalog "c1" :params "2" :metadata "3" :tags "1"}
+       {:catalog "c1" :params "3" :metadata "4" :tags "1"})
 
       (is (= 3 (pop/num-resources))))
 
@@ -82,11 +93,22 @@
        {:certname "h2" :catalog "c2" :timestamp (to-timestamp (now))})
 
       (sql/insert-records
+        :resource_metadata
+        {:hash "1" :type "Foo" :title "Bar" :exported true}
+        {:hash "2" :type "Foo" :title "Baz" :exported true}
+        {:hash "3" :type "Foo" :title "Boo" :exported true}
+        {:hash "4" :type "Foo" :title "Goo" :exported true})
+
+      (sql/insert-records
+        :resource_tags
+        {:hash "1" :tags (to-jdbc-varchar-array [])})
+
+      (sql/insert-records
        :catalog_resources
-       {:catalog "c1" :resource "1" :type "Foo" :title "Bar" :exported true :tags (to-jdbc-varchar-array [])}
-       {:catalog "c2" :resource "1" :type "Foo" :title "Baz" :exported true :tags (to-jdbc-varchar-array [])}
-       {:catalog "c1" :resource "2" :type "Foo" :title "Boo" :exported true :tags (to-jdbc-varchar-array [])}
-       {:catalog "c1" :resource "3" :type "Foo" :title "Goo" :exported true :tags (to-jdbc-varchar-array [])})
+       {:catalog "c1" :params "1" :metadata "1" :tags "1"}
+       {:catalog "c2" :params "1" :metadata "2" :tags "1"}
+       {:catalog "c1" :params "2" :metadata "3" :tags "1"}
+       {:catalog "c1" :params "3" :metadata "4" :tags "1"})
 
       (let [total  4
             unique 3

@@ -54,7 +54,7 @@
   []
   {:post [(number? %)]}
   (let [num-unique (-> (query-to-vec (str "SELECT COUNT(*) AS c FROM "
-                                          "(SELECT DISTINCT resource FROM catalog_resources cr, certname_catalogs cc, certnames c "
+                                          "(SELECT DISTINCT params FROM catalog_resources cr, certname_catalogs cc, certnames c "
                                           " WHERE cr.catalog=cc.catalog AND cc.certname=c.name AND c.deactivated IS NULL "
                                           "AND (cc.certname,cc.timestamp) IN (SELECT certname, MAX(timestamp) FROM certname_catalogs GROUP BY certname)) r"))
                        (first)
