@@ -4,6 +4,7 @@ require 'spec_helper'
 
 require 'puppet/indirector/catalog/puppetdb'
 
+require 'ruby-debug'
 describe Puppet::Resource::Catalog::Puppetdb do
   before :each do
     Puppet::Util::Puppetdb.stubs(:load_puppetdb_config).returns ['localhost', 0]
@@ -522,6 +523,34 @@ describe Puppet::Resource::Catalog::Puppetdb do
         result = subject.munge_catalog(catalog)
 
         edge = {'source' => {'type' => 'Notify', 'title' => 'noone'},
+                'target' => {'type' => 'Notify', 'title' => 'anyone'},
+                'relationship' => 'required-by'}
+
+        result['data']['edges'].should include(edge)
+      end
+
+      it "should make an edge if the other end a file resource with a missing trailing slash" do
+        other_resource = Puppet::Resource.new(:file, '/tmp/foo/')
+        resource[:require] = 'File[/tmp/foo]'
+        Puppet[:code] = [resource, other_resource].map(&:to_manifest).join
+
+        result = subject.munge_catalog(catalog)
+
+        edge = {'source' => {'type' => 'File', 'title' => '/tmp/foo/'},
+                'target' => {'type' => 'Notify', 'title' => 'anyone'},
+                'relationship' => 'required-by'}
+
+        result['data']['edges'].should include(edge)
+      end
+
+      it "should make an edge if the other end a file resource with an extra trailing slash" do
+        other_resource = Puppet::Resource.new(:file, '/tmp/foo')
+        resource[:require] = 'File[/tmp/foo/]'
+        Puppet[:code] = [resource, other_resource].map(&:to_manifest).join
+
+        result = subject.munge_catalog(catalog)
+
+        edge = {'source' => {'type' => 'File', 'title' => '/tmp/foo'},
                 'target' => {'type' => 'Notify', 'title' => 'anyone'},
                 'relationship' => 'required-by'}
 
