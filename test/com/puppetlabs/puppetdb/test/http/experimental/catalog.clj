@@ -120,18 +120,18 @@ to the result of the form supplied to this method."
         (is (= (node-a resources) ["Class[foobar]" "File[/etc/foobar/baz]" "File[/etc/foobar]"]))
         (is (= (node-b resources) ["Class[Main]" "Class[Settings]" "Stage[main]"]))
         (is (empty? (:common resources)))
-        (is (= (set (node-a edges))) #{{:source       "Stage[main]"
-                                        :target       "Class[Settings]"
+        (is (= (set (node-a edges))) #{{:source       {:type "Stage" :title "main"}
+                                        :target       {:type "Class" :title "Settings"}
                                         :relationship "contains"}
-                                       {:source       "Stage[main]"
-                                        :target       "Class[Main]"
+                                       {:source       {:type "Stage" :title "main"}
+                                        :target       {:type "Class" :title "Main"}
                                         :relationship "contains"}})
 
-        (is (= (set (node-b edges)) #{{:source       "Stage[main]"
-                                       :target       "Class[Settings]"
+        (is (= (set (node-b edges)) #{{:source       {:type "Stage" :title "main"}
+                                       :target       {:type "Class" :title "Settings"}
                                        :relationship "contains"}
-                                      {:source       "Stage[main]"
-                                       :target       "Class[Main]"
+                                      {:source       {:type "Stage" :title "main"}
+                                       :target       {:type "Class" :title "Main"}
                                        :relationship "contains"}}))
 
         (is (empty? (:common edges)))))))
