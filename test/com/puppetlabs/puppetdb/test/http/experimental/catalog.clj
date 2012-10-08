@@ -2,7 +2,8 @@
   (:require [cheshire.core :as json]
             ring.middleware.params
             [com.puppetlabs.puppetdb.scf.storage :as scf-store]
-            [com.puppetlabs.http :as pl-http])
+            [com.puppetlabs.http :as pl-http]
+            [com.puppetlabs.utils :as pl-utils])
   (:use clojure.test
         ring.mock.request
         [clj-time.core :only [now]]
@@ -18,8 +19,12 @@
   (let [request (request :get path)]
     (update-in request [:headers] assoc "Accept" c-t)))
 
-(defn get-response
-  ([]      (get-response nil))
+(defn get-diff
+  ([] (get-diff nil))
+  ([node-a node-b] (*app* (get-request (format "/experimental/catalog/%s/diff/%s" (name node-a) (name node-b))))))
+
+(defn get-catalog
+  ([]      (get-catalog nil))
   ([node] (*app* (get-request (str "/experimental/catalog/" node)))))
 
 (defn is-response-equal
@@ -46,7 +51,7 @@ to the result of the form supplied to this method."
     (scf-store/replace-catalog! empty-catalog (now))
 
     (testing "should return the catalog if it's present"
-      (is-response-equal (get-response (:certname empty-catalog))
+      (is-response-equal (get-catalog (:certname empty-catalog))
         {"name" (:certname empty-catalog)
          "resources" {"Class[Main]" {"certname"   (:certname empty-catalog)
                                      "type"       "Class"
@@ -86,12 +91,47 @@ to the result of the form supplied to this method."
                    "relationship" "contains"}}}))
 
     (testing "should return status-not-found if the catalog isn't found"
-      (let [response (get-response "non-existent-node")]
+      (let [response (get-catalog "non-existent-node")]
         (is (= pl-http/status-not-found (:status response)))
         (is (= {:error "Could not find catalog for non-existent-node"}
                (json/parse-string (:body response) true)))))
 
     (testing "should fail if no node is specified"
-      (let [response (get-response)]
+      (let [response (get-catalog)]
         (is (= pl-http/status-not-found (:status response)))
         (is (= "missing node") (:body response))))))
+
+(deftest catalog-diffs
+  (let [basic-catalog (:basic catalogs)
+        empty-catalog (:empty catalogs)
+        node-a (keyword (:certname basic-catalog))
+        node-b (keyword (:certname empty-catalog))]
+    (scf-store/add-certname! (name node-a))
+    (scf-store/add-certname! (name node-b))
+    (scf-store/replace-catalog! basic-catalog (now))
+    (scf-store/replace-catalog! empty-catalog (now))
+
+    (testing "should return the diff between the two catalogs"
+      (let [{:keys [body status]} (get-diff node-a node-b)
+            {:keys [resources edges] :as diff} (json/parse-string body true)]
+        (is (= status pl-http/status-ok))
+        (is (= (pl-utils/keyset diff) #{:resources :edges}))
+        (is (= (pl-utils/keyset resources) #{:common node-a node-b}))
+        (is (= (node-a resources) ["Class[foobar]" "File[/etc/foobar/baz]" "File[/etc/foobar]"]))
+        (is (= (node-b resources) ["Class[Main]" "Class[Settings]" "Stage[main]"]))
+        (is (empty? (:common resources)))
+        (is (= (set (node-a edges))) #{{:source       {:type "Stage" :title "main"}
+                                        :target       {:type "Class" :title "Settings"}
+                                        :relationship "contains"}
+                                       {:source       {:type "Stage" :title "main"}
+                                        :target       {:type "Class" :title "Main"}
+                                        :relationship "contains"}})
+
+        (is (= (set (node-b edges)) #{{:source       {:type "Stage" :title "main"}
+                                       :target       {:type "Class" :title "Settings"}
+                                       :relationship "contains"}
+                                      {:source       {:type "Stage" :title "main"}
+                                       :target       {:type "Class" :title "Main"}
+                                       :relationship "contains"}}))
+
+        (is (empty? (:common edges)))))))

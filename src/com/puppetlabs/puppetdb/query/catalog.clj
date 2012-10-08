@@ -10,9 +10,11 @@
 ;;                   <dependency-spec>}}
 (ns com.puppetlabs.puppetdb.query.catalog
   (:refer-clojure :exclude  [case compile conj! distinct disj! drop sort take])
-  (:require [com.puppetlabs.puppetdb.query.resource :as r])
+  (:require [com.puppetlabs.puppetdb.query.resource :as r]
+            [clojure.set :as set])
   (:use [com.puppetlabs.jdbc]
         [com.puppetlabs.puppetdb.scf.storage :only [catalogs-for-certname]]
+        [com.puppetlabs.utils :only [keyset]]
         clojureql.core))
 
 (defn get-edges
@@ -50,3 +52,31 @@
       {:name      node
        :resources resource-map
        :edges     edges})))
+
+(defn catalog-diff
+  "Retrieve a diff of the catalogs for `node-a` and `node-b`. The format returned is
+
+    {:resources {:common #{<common-resources>}
+                 <node-a> #{<node-a-resources>}
+                 <node-b> #{<node-b-resources>}}
+     :edges {:common #{<common-edges>}
+             <node-a> #{<node-a-edges>}
+             <node-b> #{<node-b-edges>}}}"
+  [node-a node-b]
+  (let [catalog-a (catalog-for-node node-a)
+        catalog-b (catalog-for-node node-b)]
+    (when-not catalog-a
+      (throw (IllegalArgumentException. (str "Cannot find catalog for " node-a))))
+    (when-not catalog-b
+      (throw (IllegalArgumentException. (str "Cannot find catalog for " node-b))))
+
+    (let [resources-a (keyset (:resources catalog-a))
+          edges-a     (:edges catalog-a)
+          resources-b (keyset (:resources catalog-b))
+          edges-b     (:edges catalog-b)]
+      {:resources {:common (sort (set/intersection resources-a resources-b))
+                   node-a  (sort (set/difference resources-a resources-b))
+                   node-b  (sort (set/difference resources-b resources-a))}
+       :edges {:common (set/intersection edges-a edges-b)
+               node-a  (set/difference edges-a edges-b)
+               node-b  (set/difference edges-b edges-a)}})))
