@@ -117,8 +117,8 @@ to the result of the form supplied to this method."
         (is (= status pl-http/status-ok))
         (is (= (pl-utils/keyset diff) #{:resources :edges}))
         (is (= (pl-utils/keyset resources) #{:common node-a node-b}))
-        (is (= (node-a resources) ["Class[foobar]" "File[/etc/foobar/baz]" "File[/etc/foobar]"]))
-        (is (= (node-b resources) ["Class[Main]" "Class[Settings]" "Stage[main]"]))
+        (is (= (node-a resources) [{:type "Class" :title "foobar"} {:type "File" :title "/etc/foobar"} {:type "File" :title "/etc/foobar/baz"}]))
+        (is (= (node-b resources) [{:type "Class" :title "Main"} {:type "Class" :title "Settings"} {:type "Stage" :title "main"}]))
         (is (empty? (:common resources)))
         (is (= (set (node-a edges))) #{{:source       {:type "Stage" :title "main"}
                                         :target       {:type "Class" :title "Settings"}

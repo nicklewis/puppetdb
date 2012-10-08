@@ -53,6 +53,11 @@
        :resources resource-map
        :edges     edges})))
 
+(defn- resources-to-specs
+  [resources]
+  (->> (vals resources)
+      (map #(select-keys % [:type :title]))))
+
 (defn catalog-diff
   "Retrieve a diff of the catalogs for `node-a` and `node-b`. The format returned is
 
@@ -70,13 +75,13 @@
     (when-not catalog-b
       (throw (IllegalArgumentException. (str "Cannot find catalog for " node-b))))
 
-    (let [resources-a (keyset (:resources catalog-a))
+    (let [resources-a (resources-to-specs (:resources catalog-a))
           edges-a     (:edges catalog-a)
-          resources-b (keyset (:resources catalog-b))
+          resources-b (resources-to-specs (:resources catalog-b))
           edges-b     (:edges catalog-b)]
-      {:resources {:common (sort (set/intersection resources-a resources-b))
-                   node-a  (sort (set/difference resources-a resources-b))
-                   node-b  (sort (set/difference resources-b resources-a))}
+      {:resources {:common (sort-by (juxt :type :title) (set/intersection resources-a resources-b))
+                   node-a  (sort-by (juxt :type :title) (set/difference resources-a resources-b))
+                   node-b  (sort-by (juxt :type :title) (set/difference resources-b resources-a))}
        :edges {:common (set/intersection edges-a edges-b)
                node-a  (set/difference edges-a edges-b)
                node-b  (set/difference edges-b edges-a)}})))
