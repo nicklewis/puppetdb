@@ -53,6 +53,16 @@
        :resources resource-map
        :edges     edges})))
 
+(defn- stringify-resource
+  [{:keys [type title]}]
+  (format "%s[%s]" type title))
+
+(defn- stringify-edge
+  [edge]
+  (-> edge
+      (update-in [:source] stringify-resource)
+      (update-in [:target] stringify-resource)))
+
 (defn catalog-diff
   "Retrieve a diff of the catalogs for `node-a` and `node-b`. The format returned is
 
@@ -71,9 +81,9 @@
       (throw (IllegalArgumentException. (str "Cannot find catalog for " node-b))))
 
     (let [resources-a (keyset (:resources catalog-a))
-          edges-a     (:edges catalog-a)
+          edges-a     (set (map stringify-edge (:edges catalog-a)))
           resources-b (keyset (:resources catalog-b))
-          edges-b     (:edges catalog-b)]
+          edges-b     (set (map stringify-edge (:edges catalog-b)))]
       {:resources {:common (sort (set/intersection resources-a resources-b))
                    node-a  (sort (set/difference resources-a resources-b))
                    node-b  (sort (set/difference resources-b resources-a))}
