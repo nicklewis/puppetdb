@@ -51,6 +51,7 @@
             [com.puppetlabs.jetty :as jetty]
             [com.puppetlabs.mq :as mq]
             [com.puppetlabs.utils :as pl-utils]
+            [com.puppetlabs.puppetdb.cats :as cats]
             [clojure.java.jdbc :as sql]
             [clojure.string :as string]
             [clojure.tools.logging :as log]
@@ -367,7 +368,7 @@
         vardir                                     (validate-vardir (:vardir global))
         update-server                              (:update-server global "http://updates.puppetlabs.com/check-for-updates")
         resource-query-limit                       (get global :resource-query-limit 20000)
-        db                                         (pl-jdbc/pooled-datasource database)
+        db                                         (cats/initialize-database! (file vardir "cats"))
         db-gc-minutes                              (get database :gc-interval)
         node-ttl-seconds                           (get database :node-ttl-seconds)
         node-purge-ttl-seconds                     (get database :node-purge-ttl-seconds)
@@ -388,17 +389,6 @@
     ;; Add a shutdown hook where we can handle any required cleanup
     (pl-utils/add-shutdown-hook! on-shutdown)
 
-    ;; Ensure the database is migrated to the latest version, and warn if it's
-    ;; deprecated. We do this in a single connection because HSQLDB seems to
-    ;; get confused if the database doesn't exist but we open and close a
-    ;; connection without creating anything.
-    (sql/with-connection db
-      (scf-store/warn-on-db-deprecation!)
-      (migrate!))
-
-    ;; Initialize database-dependent metrics
-    (pop/initialize-metrics db)
-
     (let [error         (promise)
           broker        (try
                           (log/info "Starting broker")
@@ -414,18 +404,13 @@
                           (vec (for [n (range nthreads)]
                                  (future (with-error-delivery error
                                            (load-from-mq mq-addr mq-endpoint discard-dir db))))))
-          updater       (future (maybe-check-for-updates product-name update-server db))
           web-app       (let [authorized? (if-let [wl (jetty :certificate-whitelist)]
                                             (pl-utils/cn-whitelist->authorizer wl)
                                             (constantly true))
                               app         (server/build-app :globals globals :authorized? authorized?)]
                           (log/info "Starting query server")
                           (future (with-error-delivery error
-                                    (jetty/run-jetty app jetty))))
-          db-gc         (do
-                          (log/info (format "Starting database sweeper (%d minute interval)" db-gc-minutes))
-                          (future (with-error-delivery error
-                                    (sweep-database! db db-gc-minutes node-ttl-seconds node-purge-ttl-seconds report-ttl-seconds))))]
+                                    (jetty/run-jetty app jetty))))]
 
       ;; Start debug REPL if necessary
       (let [{:keys [enabled type host port] :or {type "nrepl" host "localhost"}} (:repl config)]
@@ -436,9 +421,7 @@
       (let [exception (deref error)]
         (doseq [cp command-procs]
           (future-cancel cp))
-        (future-cancel updater)
         (future-cancel web-app)
-        (future-cancel db-gc)
         ;; Stop the mq the old-fashioned way
         (mq/stop-broker! broker)
 

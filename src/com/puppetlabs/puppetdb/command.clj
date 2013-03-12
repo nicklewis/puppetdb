@@ -64,6 +64,7 @@
             [com.puppetlabs.puppetdb.command.dlo :as dlo]
             [com.puppetlabs.mq :as mq]
             [com.puppetlabs.utils :as pl-utils]
+            [com.puppetlabs.puppetdb.cats :as cats]
             [clj-http.client :as client]
             [cheshire.core :as json]
             [clamq.protocol.consumer :as mq-cons]
@@ -299,8 +300,8 @@
 (defmulti process-command!
   "Takes a command object and processes it to completion. Dispatch is
   based on the command's name and version information"
-  (fn [{:keys [command version] :or {version 1}} _]
-    [command version]))
+  (fn [{:keys [command version] :or {version 1}} {:keys [db]}]
+    [(if (= (:type db) :cats) :cats :sql) command version]))
 
 ;; Catalog replacement
 
@@ -317,21 +318,29 @@
         (scf-storage/replace-catalog! catalog timestamp)))
     (log/info (format "[%s] [replace catalog] %s" id certname))))
 
-(defmethod process-command! ["replace catalog" 1]
+(defmethod process-command! [:sql "replace catalog" 1]
   [{:keys [version payload] :as command} options]
   {:pre [(= version 1)]}
   (when-not (string? payload)
     (throw (IllegalArgumentException. "Payload for a 'replace catalog' v1 command must be a JSON string.")))
   (replace-catalog* command options))
 
-(defmethod process-command! ["replace catalog" 2]
-  [{:keys [version] :as  command} options]
+(defmethod process-command! [:sql "replace catalog" 2]
+  [{:keys [version] :as command} options]
   {:pre [(= version 2)]}
   (replace-catalog* command options))
 
+(defmethod process-command! [:cats "replace catalog" 1]
+  [{:keys [payload version annotations]} {:keys [db]}]
+  (let [catalog (upon-error-throw-fatality (cat/parse-catalog payload version))
+        certname (:certname catalog)
+        id (:id annotations)]
+    (cats/save-catalog! db certname catalog)
+    (log/info (format "[%s] [replace catalog] %s" id certname))))
+
 ;; Fact replacement
 
-(defmethod process-command! ["replace facts" 1]
+(defmethod process-command! [:sql "replace facts" 1]
   [{:keys [payload annotations]} {:keys [db]}]
   (let [{:strs [name] :as facts} (upon-error-throw-fatality (json/parse-string payload))
         id                       (:id annotations)
@@ -344,7 +353,7 @@
 
 ;; Node deactivation
 
-(defmethod process-command! ["deactivate node" 1]
+(defmethod process-command! [:sql "deactivate node" 1]
   [{:keys [payload annotations]} {:keys [db]}]
   (let [certname (upon-error-throw-fatality (json/parse-string payload))
         id       (:id annotations)]
@@ -356,7 +365,7 @@
 
 ;; Report submission
 
-(defmethod process-command! ["store report" 1]
+(defmethod process-command! [:sql "store report" 1]
   [{:keys [payload annotations]} {:keys [db]}]
   (let [id          (:id annotations)
         report      (upon-error-throw-fatality
@@ -564,7 +573,7 @@
                    (rand-int (Math/pow 2 n)))
         logger  (if (> n (/ maximum-allowable-retries 4))
                   #(log/error %)
-                  #(log/debug %))]
+                  #(log/error %))]
     (logger (format "[%s] [%s] Retrying after attempt %d, due to: %s"
                     id command attempt e))
     (publish-fn (json/generate-string msg) (mq/delay-property delay :seconds))))
