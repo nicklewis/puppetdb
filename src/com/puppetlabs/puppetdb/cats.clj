@@ -3,6 +3,58 @@
   (:require [cheshire.core :as json])
   (:use [clojure.java.io :only [file]]))
 
+(gen-class
+  :name com.puppetlabs.puppetdb.cats.StegoStream
+  :extends java.io.InputStream
+  :prefix "stego-"
+  :state state
+  :init init
+  :constructors {[java.io.File] []}
+  :exposes-methods {read readSuper})
+
+(defn stego-init
+  [input-file]
+  (let [raster (.getRaster (ImageIO/read input-file))]
+    [[] (ref {:raster raster
+              :pixel 0
+              ;; The number of "data" bits contained per byte.
+              :bits-per-byte 2
+              ;; The number of "data" bytes contained per pixel.
+              :bytes-per-pixel 1
+              :done? false
+              :width (.getWidth raster)
+              :height (.getHeight raster)})]))
+
+(defn- index->coords
+  [index width]
+  [(mod index width) (int (/ index width))])
+
+(defn- assemble-byte
+  [bytes]
+  (byte (apply bit-or (map #(bit-shift-left (first %) (last %)) (map vector (map #(bit-and % 2r11) bytes) [6 4 2 0])))))
+
+(defn stego-read
+  ([this]
+   (let [{:keys [bytes-per-byte raster width pixel done?]} @(.state this)
+         [x y] (index->coords pixel width)
+         output-array (int-array 4)]
+     (if done?
+       -1
+       (do
+         (dosync (alter (.state this) update-in [:pixel] inc))
+         (let [result (assemble-byte (.getPixel raster x y output-array))]
+           (if (= result 0)
+             (do
+               (dosync (alter (.state this) assoc :done? true))
+               -1)
+             result))))))
+  ([this b off len]
+   (.readSuper this b off len)))
+
+(defn stego-skip
+  [this n]
+  (dosync (alter (.state this)) update-in [:pixel] + n))
+
 (defn initialize-database!
   "Returns a map? corresponding to the catabase at `datadir`."
   [datadir]
@@ -44,10 +96,6 @@
         height (.getHeight cat-raster)]
     (.setPixels cat-raster 0 0 width height new-bytes)
     cat-raster))
-
-(defn assemble-byte
-  [[a b c d]]
-  (byte (apply bit-or (map #(bit-shift-left (first %) (last %)) (map vector (map #(bit-and % 2r11) [a b c d]) [6 4 2 0])))))
 
 (defn retrieve-catalog
   [{:keys [datadir]} certname]
