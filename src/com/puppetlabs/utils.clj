@@ -510,7 +510,7 @@
   {:pre  [(or (string? whitelist)
               (instance? java.io.File whitelist))]
    :post [(fn? %)]}
-  (let [allowed? (set (lines whitelist))]
+  (let [allowed? (set (map string/trim (lines whitelist)))]
     (fn [{:keys [ssl-client-cn scheme] :as req}]
       (or (= scheme :http)
           (allowed? ssl-client-cn)))))

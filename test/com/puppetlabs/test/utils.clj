@@ -165,7 +165,7 @@
     (testing "when whitelist is present"
       (let [whitelist (fs/temp-file)]
         (.deleteOnExit whitelist)
-        (spit whitelist "foo\nbar\n")
+        (spit whitelist "foo  \nbar\t\n\n\n")
 
         (let [authorized? (cn-whitelist->authorizer whitelist)]
           (testing "should allow plain-text, HTTP requests"
@@ -177,7 +177,7 @@
           (testing "should reject certs that don't appear in the whitelist"
             (is (not (authorized? {:scheme :https :ssl-client-cn "goo"}))))
 
-          (testing "should accept certs that appear in the whitelist"
+          (testing "should accept certs that appear in the whitelist ignoring whitespace"
             (is (authorized? {:scheme :https :ssl-client-cn "foo"}))))))))
 
 (deftest memoization
